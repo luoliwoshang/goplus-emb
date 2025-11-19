@@ -1,4 +1,3 @@
-testtest
 // CMSIS abstraction functions.
 //
 // Original copyright:
