@@ -1,5 +1,3 @@
-[SYNC] Sync device from TinyGo v0.38.9
-[SYNC] Sync device from TinyGo v0.38.9
 //go:build adafruit_esp32_feather_v2
 
 package machine
