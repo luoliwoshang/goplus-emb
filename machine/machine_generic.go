@@ -4,7 +4,8 @@ package machine
 
 import (
 	"crypto/rand"
-	_ "unsafe"
+	"errors"
+	"slices"
 )
 
 // Dummy machine package that calls out to external functions.
@@ -40,13 +41,13 @@ func (p Pin) Get() bool {
 	return gpioGet(p)
 }
 
-//go:linkname gpioConfigure __llgo_gpio_configure
+//export __tinygo_gpio_configure
 func gpioConfigure(pin Pin, config PinConfig)
 
-//go:linkname gpioSet __llgo_gpio_set
+//export __tinygo_gpio_set
 func gpioSet(pin Pin, value bool)
 
-//go:linkname gpioGet __llgo_gpio_get
+//export __tinygo_gpio_get
 func gpioGet(pin Pin) bool
 
 // Generic PWM/timer peripheral. Properties can be configured depending on the
@@ -137,13 +138,13 @@ func (t *timerType) Top() uint32 {
 	return t.top
 }
 
-//go:linkname pwmConfigure __llgo_pwm_configure
+//export __tinygo_pwm_configure
 func pwmConfigure(instance int32, frequency float64, top uint32)
 
-//go:linkname pwmChannelConfigure __llgo_pwm_channel_configure
+//export __tinygo_pwm_channel_configure
 func pwmChannelConfigure(instance, channel int32, pin Pin)
 
-//go:linkname pwmChannelSet __llgo_pwm_channel_set
+//export __tinygo_pwm_channel_set
 func pwmChannelSet(instance int32, channel uint8, value uint32)
 
 type SPI struct {
@@ -200,13 +201,13 @@ func (spi *SPI) Tx(w, r []byte) error {
 	return nil
 }
 
-//go:linkname spiConfigure __llgo_spi_configure
+//export __tinygo_spi_configure
 func spiConfigure(bus uint8, sck Pin, SDO Pin, SDI Pin)
 
-//go:linkname spiTransfer __llgo_spi_transfer
+//export __tinygo_spi_transfer
 func spiTransfer(bus uint8, w uint8) uint8
 
-//go:linkname spiTX __llgo_spi_tx
+//export __tinygo_spi_tx
 func spiTX(bus uint8, wptr *byte, wlen int, rptr *byte, rlen int) uint8
 
 // InitADC enables support for ADC peripherals.
@@ -223,12 +224,14 @@ func (adc ADC) Get() uint16 {
 	return adcRead(adc.Pin)
 }
 
-//go:linkname adcRead __llgo_adc_read
+//export __tinygo_adc_read
 func adcRead(pin Pin) uint16
 
 // I2C is a generic implementation of the Inter-IC communication protocol.
 type I2C struct {
-	Bus uint8
+	Bus     uint8
+	PinsSCL []Pin
+	PinsSDA []Pin
 }
 
 // I2CConfig is used to store config info for I2C.
@@ -240,7 +243,21 @@ type I2CConfig struct {
 
 // Configure is intended to setup the I2C interface.
 func (i2c *I2C) Configure(config I2CConfig) error {
-	i2cConfigure(i2c.Bus, config.SCL, config.SDA)
+	if i2c.PinsSCL != nil {
+		matchSCL := slices.Index(i2c.PinsSCL, config.SCL) >= 0
+		matchSDA := slices.Index(i2c.PinsSDA, config.SDA) >= 0
+		if !matchSCL && !matchSDA {
+			return errors.New("i2c: SCL and SDA pins are incorrect for this I2C instance")
+		} else if !matchSCL {
+			return errors.New("i2c: SCL pin is incorrect for this I2C instance")
+		} else if !matchSDA {
+			return errors.New("i2c: SDA pin is incorrect for this I2C instance")
+		}
+	}
+	if config.Frequency == 0 {
+		config.Frequency = 100 * KHz
+	}
+	i2cConfigure(i2c.Bus, config.SCL, config.SDA, config.Frequency)
 	return nil
 }
 
@@ -262,19 +279,29 @@ func (i2c *I2C) Tx(addr uint16, w, r []byte) error {
 		rptr = &r[0]
 		rlen = len(r)
 	}
-	i2cTransfer(i2c.Bus, wptr, wlen, rptr, rlen)
-	// TODO: do something with the returned error code.
-	return nil
+	errCode := i2cTransfer(i2c.Bus, addr, wptr, wlen, rptr, rlen)
+	switch errCode {
+	case 0:
+		return nil
+	case 1:
+		return errI2CNoDevices
+	case 2:
+		return errI2CMultipleDevices
+	case 3:
+		return errI2CWrongAddress
+	default:
+		return errI2CBusError // unknown error code
+	}
 }
 
-//go:linkname i2cConfigure __llgo_i2c_configure
-func i2cConfigure(bus uint8, scl Pin, sda Pin)
+//export __tinygo_i2c_configure
+func i2cConfigure(bus uint8, scl Pin, sda Pin, frequency uint32)
 
-//go:linkname i2cSetBaudRate __llgo_i2c_set_baud_rate
+//export __tinygo_i2c_set_baud_rate
 func i2cSetBaudRate(bus uint8, br uint32)
 
-//go:linkname i2cTransfer __llgo_i2c_transfer
-func i2cTransfer(bus uint8, w *byte, wlen int, r *byte, rlen int) int
+//export __tinygo_i2c_transfer
+func i2cTransfer(bus uint8, addr uint16, w *byte, wlen int, r *byte, rlen int) int
 
 type UART struct {
 	Bus uint8
@@ -313,13 +340,13 @@ func (uart *UART) WriteByte(b byte) error {
 	return nil
 }
 
-//go:linkname uartConfigure __llgo_uart_configure
+//export __tinygo_uart_configure
 func uartConfigure(bus uint8, tx Pin, rx Pin)
 
-//go:linkname uartRead __llgo_uart_read
+//export __tinygo_uart_read
 func uartRead(bus uint8, buf *byte, bufLen int) int
 
-//go:linkname uartWrite __llgo_uart_write
+//export __tinygo_uart_write
 func uartWrite(bus uint8, buf *byte, bufLen int) int
 
 var (
@@ -336,15 +363,6 @@ var (
 	sercomUSART3 = UART{3}
 	sercomUSART4 = UART{4}
 	sercomUSART5 = UART{5}
-
-	sercomI2CM0 = &I2C{0}
-	sercomI2CM1 = &I2C{1}
-	sercomI2CM2 = &I2C{2}
-	sercomI2CM3 = &I2C{3}
-	sercomI2CM4 = &I2C{4}
-	sercomI2CM5 = &I2C{5}
-	sercomI2CM6 = &I2C{6}
-	sercomI2CM7 = &I2C{7}
 
 	sercomSPIM0 = &SPI{0}
 	sercomSPIM1 = &SPI{1}
