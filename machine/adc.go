@@ -1,4 +1,3 @@
-[SYNC] Sync machine from TinyGo v0.38.0
 package machine
 
 // Hardware abstraction layer for the analog-to-digital conversion (ADC)
