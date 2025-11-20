@@ -1,4 +1,3 @@
-[SYNC] Sync device from TinyGo v0.38.0
 // Hand written file mostly derived from https://problemkaputt.de/gbatek.htm
 
 //go:build gameboyadvance
